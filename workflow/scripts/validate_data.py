@@ -6,8 +6,6 @@ from collections import OrderedDict
 
 sns.set_theme("paper", style="whitegrid")
 
-arizona = ['Arizona0 0 CCGT', 'Arizona0 0 OCGT', 'Arizona0 0 coal', 'Arizona0 0 hydro', 'Arizona0 0 nuclear', 
-           'Arizona0 0 oil', 'Arizona0 0 onwind','Arizona0 0 solar']
 rename_op = {'CCGT':'Natural gas', 'hydro':'Hydro', 'oil':'Oil', 'onwind':'Onshore wind', 'solar':'Solar', 'nuclear':'Nuclear','coal':'Coal', 'geothermal':'Other'}
 selected_cols = ["Balancing Authority", 
                  "UTC Time at End of Hour",  
@@ -87,7 +85,8 @@ def optimized_df(solvednw_path, order):
     """
     nw = pypsa.Network(solvednw_path)
     # Drop Arizona since there is no Arizona balancing authority in the historical data
-    ba_carrier = nw.generators_t["p"].drop(arizona, axis=1)
+    columns_to_drop = [col for col in nw.generators_t["p"].columns if 'Arizona' in col]
+    ba_carrier = nw.generators_t["p"].drop(columns_to_drop, axis=1)
     optimized = ba_carrier.groupby(axis="columns", by=nw.generators["carrier"]).sum().loc["2019-01-02 00:00:00":"2019-12-30 23:00:00"]
     # Combine CCGT and OCGT 
     optimized['CCGT'] = optimized['CCGT'] + optimized['OCGT']
