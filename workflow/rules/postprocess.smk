@@ -39,7 +39,7 @@ rule plot_figures:
 
 rule plot_validation_figures:
     input:
-        network="results/{interconnect}/networks/elec_s_{clusters}_ec_l{ll}_{opts}.nc",
+        network="results/{interconnect}/networks/elec_s_{clusters}_ec_l{ll}_{opts}_operations.nc",
         historic_first="resources/eia/6moFiles/EIA930_BALANCE_2019_Jan_Jun.csv",
         historic_second="resources/eia/6moFiles/EIA930_BALANCE_2019_Jul_Dec.csv",
     output:

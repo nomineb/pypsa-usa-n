@@ -90,8 +90,8 @@ def optimized_df(n, order):
     Create a DataFrame from the model output/optimized
     """
     # Drop Arizona since there is no Arizona balancing authority in the historical data
-    columns_to_drop = [col for col in n.generators_t["p"].columns if 'Arizona' in col]
-    ba_carrier = n.generators_t["p"].drop(columns_to_drop, axis=1)
+    #columns_to_drop = [col for col in n.generators_t["p"].columns if 'Arizona' in col]
+    ba_carrier = n.generators_t["p"] #.drop(columns_to_drop, axis=1)
     optimized = ba_carrier.groupby(axis="columns", by=n.generators["carrier"]).sum().loc["2019-01-02 00:00:00":"2019-12-30 23:00:00"]
     # Combine CCGT and OCGT 
     optimized['CCGT'] = optimized['CCGT'] + optimized['OCGT']
