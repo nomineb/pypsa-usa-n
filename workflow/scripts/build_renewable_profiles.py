@@ -9,8 +9,7 @@ under water.
 
 .. note:: Hydroelectric profiles are built in script :mod:`build_hydro_profiles`.
 
-Relevant settings
------------------
+**Relevant settings**
 
 .. code:: yaml
 
@@ -26,6 +25,7 @@ Relevant settings
             grid_codes:
             distance:
             natura:
+            min_depth:
             max_depth:
             max_shore_distance:
             min_shore_distance:
@@ -40,8 +40,7 @@ Relevant settings
     Documentation of the configuration file ``config/config.yaml`` at
     :ref:`snapshots_cf`, :ref:`atlite_cf`, :ref:`renewable_cf`
 
-Inputs
-------
+**Inputs**
 
 - ``data/bundle/corine/g250_clc06_V18_5.tif``: `CORINE Land Cover (CLC) <https://land.copernicus.eu/pan-european/corine-land-cover>`_ inventory on `44 classes <https://wiki.openstreetmap.org/wiki/Corine_Land_Cover#Tagging>`_ of land use (e.g. forests, arable land, industrial, urban areas).
 
@@ -62,8 +61,7 @@ Inputs
 - ``"cutouts/" + params["renewable"][{technology}]['cutout']``: :ref:`cutout`
 - ``networks/base.nc``: :ref:`base`
 
-Outputs
--------
+**Outputs**
 
 - `resources/profile_{technology}.nc` with the following structure
 
@@ -134,30 +132,11 @@ cutout grid cell and each node using the `GLAES
 <https://github.com/FZJ-IEK3-VSA/glaes>`_ library. This uses the CORINE land use data,
 Natura2000 nature reserves and GEBCO bathymetry data.
 
-# .. image:: img/eligibility.png
-#     :scale: 50 %
-#     :align: center
-
 To compute the layout of generators in each node's Voronoi cell, the
 installable potential in each grid cell is multiplied with the capacity factor
 at each grid cell. This is done since we assume more generators are installed
 at cells with a higher capacity factor.
 
-# .. image:: img/offwinddc-gridcell.png
-#     :scale: 50 %
-#     :align: center
-
-# .. image:: img/offwindac-gridcell.png
-#     :scale: 50 %
-#     :align: center
-
-# .. image:: img/onwind-gridcell.png
-#     :scale: 50 %
-#     :align: center
-
-# .. image:: img/solar-gridcell.png
-#     :scale: 50 %
-#     :align: center
 
 This layout is then used to compute the generation availability time series
 from the weather data cutout from `atlite`.
@@ -174,14 +153,16 @@ node (`p_nom_max`): `simple` and `conservative`:
   proportional to the layout until the limit of an individual grid cell is
   reached.
 """
+
+
 import functools
 import logging
 import time
 
 import atlite
 import geopandas as gpd
-import pandas as pd
 import numpy as np
+import pandas as pd
 import xarray as xr
 from _helpers import configure_logging
 from dask.distributed import Client
@@ -195,7 +176,11 @@ if __name__ == "__main__":
     if "snakemake" not in globals():
         from _helpers import mock_snakemake
 
-        snakemake = mock_snakemake("build_renewable_profiles", technology="onwind", interconnect="western")
+        snakemake = mock_snakemake(
+            "build_renewable_profiles",
+            technology="solar",
+            interconnect="eastern",
+        )
     configure_logging(snakemake)
 
     nprocesses = int(snakemake.threads)
@@ -220,6 +205,7 @@ if __name__ == "__main__":
 
     sns = pd.date_range(freq="h", **snakemake.config["snapshots"])
     cutout = atlite.Cutout(snakemake.input.cutout).sel(time=sns)
+
     regions = gpd.read_file(snakemake.input.regions)
     assert not regions.empty, (
         f"List of regions in {snakemake.input.regions} is empty, please "
@@ -243,16 +229,37 @@ if __name__ == "__main__":
         codes = corine["distance_grid_codes"]
         buffer = corine["distance"]
         excluder.add_raster(
-            snakemake.input.corine, codes=codes, buffer=buffer, crs=4326
+            snakemake.input.corine,
+            codes=codes,
+            buffer=buffer,
+            crs=4326,
         )
-    
+
+    if params.get("cec", 0):
+        excluder.add_raster(
+            snakemake.input[f"cec_{snakemake.wildcards.technology}"],
+            nodata=0,
+            allow_no_overlap=True,
+        )
+
+    if params.get("boem_screen", 0):
+        excluder.add_raster(
+            snakemake.input[f"boem_osw"],
+            invert=True,
+            nodata=0,
+            allow_no_overlap=True,
+        )
+
     if "ship_threshold" in params:
         shipping_threshold = (
             params["ship_threshold"] * 8760 * 6
         )  # approximation because 6 years of data which is hourly collected
         func = functools.partial(np.less, shipping_threshold)
         excluder.add_raster(
-            snakemake.input.ship_density, codes=func, crs=4326, allow_no_overlap=True
+            snakemake.input.ship_density,
+            codes=func,
+            crs=4326,
+            allow_no_overlap=True,
         )
 
     if params.get("max_depth"):
@@ -262,6 +269,13 @@ if __name__ == "__main__":
         func = functools.partial(np.greater, -params["max_depth"])
         excluder.add_raster(snakemake.input.gebco, codes=func, crs=4326, nodata=-1000)
 
+    if params.get("min_depth"):
+        # lambda not supported for atlite + multiprocessing
+        # use named function np.greater with partially frozen argument instead
+        # and exclude areas where: -min_depth < grid cell depth
+        func = functools.partial(np.less, -params["min_depth"])
+        excluder.add_raster(snakemake.input.gebco, codes=func, crs=4326, nodata=-1000)
+
     if "min_shore_distance" in params:
         buffer = params["min_shore_distance"]
         excluder.add_geometry(snakemake.input.country_shapes, buffer=buffer)
@@ -269,22 +283,26 @@ if __name__ == "__main__":
     if "max_shore_distance" in params:
         buffer = params["max_shore_distance"]
         excluder.add_geometry(
-            snakemake.input.country_shapes, buffer=buffer, invert=True
+            snakemake.input.country_shapes,
+            buffer=buffer,
+            invert=True,
         )
 
+    # excluder.plot_shape_availability(regions)
+
+    logger.info("Calculate landuse availability...")
+    start = time.time()
+
     kwargs = dict(nprocesses=nprocesses, disable_progressbar=noprogress)
-    if noprogress:
-        logger.info("Calculate landuse availabilities...")
-        start = time.time()
-        availability = cutout.availabilitymatrix(regions, excluder, **kwargs)
-        duration = time.time() - start
-        logger.info(f"Completed availability calculation ({duration:2.2f}s)")
-    else:
-        availability = cutout.availabilitymatrix(regions, excluder, **kwargs)
+    availability = cutout.availabilitymatrix(regions, excluder, **kwargs)
+
+    duration = time.time() - start
+    logger.info(f"Completed landuse availability calculation ({duration:2.2f}s)")
 
     area = cutout.grid.to_crs("ESRI:54009").area / 1e6
     area = xr.DataArray(
-        area.values.reshape(cutout.shape), [cutout.coords["y"], cutout.coords["x"]]
+        area.values.reshape(cutout.shape),
+        [cutout.coords["y"], cutout.coords["x"]],
     )
 
     potential = capacity_per_sqkm * availability.sum("bus") * area
@@ -311,7 +329,7 @@ if __name__ == "__main__":
     else:
         raise AssertionError(
             'Config key `potential` should be one of "simple" '
-            f'(default) or "conservative", not "{p_nom_max_meth}"'
+            f'(default) or "conservative", not "{p_nom_max_meth}"',
         )
 
     logger.info("Calculate average distances.")
@@ -341,7 +359,7 @@ if __name__ == "__main__":
             p_nom_max.rename("p_nom_max"),
             potential.rename("potential"),
             average_distance.rename("average_distance"),
-        ]
+        ],
     )
     if snakemake.wildcards.technology.startswith("offwind"):
         logger.info("Calculate underwater fraction of connections.")
@@ -360,7 +378,7 @@ if __name__ == "__main__":
         bus=(
             (ds["profile"].mean("time") > params.get("min_p_max_pu", 0.0))
             & (ds["p_nom_max"] > params.get("min_p_nom_max", 0.0))
-        )
+        ),
     )
 
     if "clip_p_max_pu" in params:

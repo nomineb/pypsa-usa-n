@@ -1,4 +1,5 @@
 from snakemake.utils import min_version
+
 min_version("6.0")
 
 from shutil import copyfile, move, rmtree
@@ -6,46 +7,70 @@ from snakemake.remote.HTTP import RemoteProvider as HTTPRemoteProvider
 
 HTTP = HTTPRemoteProvider()
 
-# -------------------------- Imports and Parameters -------------------------- #
-
 from os.path import normpath
+from itertools import chain
 from pathlib import Path
 
-FIGURES_SINGLE = [
-    "capacity_map_base",
-    "capacity_map_optimized",
-    "capacity_map_optimized_brownfield",
-    "capacity_map_new",
-    "costs_bar",
-    "production_bar",
-    "production_area",
-    "emissions_area",
-    "emissions_accumulated",
-    "emissions_accumulated_tech",
-    "emissions_map",
-    "renewable_potential_map",
-    "capacity_additions_bar"
+FIGURES_MAPS = [
+    "capacity_map_base.pdf",
+    "capacity_map_optimized.pdf",
+    "capacity_map_new.pdf",
+    "emissions_map.pdf",
+    "renewable_potential_map.pdf",
+    "demand_map.pdf",
+    "lmp_map.pdf",
 ]
+
+FIGURES_EMISSIONS = [
+    "emissions_area.pdf",
+    "emissions_accumulated.pdf",
+    "emissions_accumulated_tech.pdf",
+    "emissions_area.html",
+    # "emissions_node.html",
+    "emissions_region.html",
+    "emissions_accumulated_tech.html",
+    "bar_regional_emissions.pdf",
+]
+
+FIGURES_PRODUCTION = [
+    "production_area.pdf",
+    "production_area.html",
+]
+
+FIGURES_SYSTEM = [
+    "production_bar.pdf",
+    "capacity_additions_bar.pdf",
+    "costs_bar.pdf",
+    "bar_regional_capacity_additions.pdf",
+    "global_constraint_shadow_prices.pdf",
+    "generator_data_panel.pdf",
+    "curtailment_heatmap.pdf",
+    "capfac_heatmap.pdf",
+    "fuel_costs.pdf",
+    "region_lmps.pdf",
+]
+
+FIGURES_NATURAL_GAS = ["natural_gas.html"]
 
 FIGURES_VALIDATE = [
-    "seasonal_stacked_plot",
-    "carrier_production_bar",
-    "production_deviation_bar"
+    "seasonal_stacked_plot.pdf",
+    "carrier_production_bar.pdf",
+    "val_bar_regional_emissions.pdf",
+    "val_bar_state_emissions.pdf",
+    "val_generator_data_panel.pdf",
+    "val_heatmap_capacity_factor.pdf",
+    "val_box_region_lmps.pdf",
+    "val_map_load_shedding.pdf",
+    "val_generator_stack.pdf",
+    "val_map_line_loading.pdf",
 ]
 
-FIGURES_SINGLE_HTML = [
-    "production_area_html",
-    "emissions_area_html",
-    # "emissions_node_html",
-    "emissions_region_html",
-    "emissions_accumulated_tech_html"
-]
 
 # --------------------------- Workflow constraints --------------------------- #
-
 localrules:
     dag,
     clean,
+
 
 wildcard_constraints:
     interconnect="usa|texas|western|eastern",
@@ -53,17 +78,21 @@ wildcard_constraints:
     clusters="[0-9]+m?|all",
     ll="(v|c)([0-9\.]+|opt|all)|all",
     opts="[-+a-zA-Z0-9\.]*",
+    scope="urban|rural|total",
+    sector="([EG]-)*[EG]",
 
 
 # -------------------------- Config and Subworkflows ------------------------- #
 
-# Merge subworkflow configs and main config
-configfile: "config/config.default.yaml"
-configfile: "config/config.cluster.yaml"
-configfile: "config/config.osw.yaml"
-configfile: "config/config.plotting.yaml"
 
-ATLITE_NPROCESSES = config["atlite"].get("nprocesses", 4)
+# Merge subworkflow configs and main config
+# configfile: "config/config.default.yaml"
+configfile: "config/tests/config.validation.yaml"
+configfile: "config/config.cluster.yaml"
+configfile: "config/config.common.yaml"
+configfile: "config/config.plotting.yaml"
+configfile: "config/config.api.yaml"
+
 
 run = config.get("run", {})
 RDIR = run["name"] + "/" if run.get("name") else ""
@@ -71,9 +100,10 @@ CDIR = RDIR if not run.get("shared_cutouts") else ""
 
 LOGS = "logs/" + RDIR
 BENCHMARKS = "benchmarks/" + RDIR
-DATA = "data/" + RDIR
+DATA = "data/"
 RESOURCES = "resources/" + RDIR if not run.get("shared_resources") else "resources/"
 RESULTS = "results/" + RDIR
+
 
 include: "rules/common.smk"
 include: "rules/retrieve.smk"
@@ -81,21 +111,109 @@ include: "rules/build_electricity.smk"
 include: "rules/build_sector.smk"
 include: "rules/solve_electricity.smk"
 include: "rules/postprocess.smk"
+include: "rules/validate.smk"
+
+
+if "E" not in config["scenario"]["sector"]:
+    if not config["scenario"]["sector"]:
+        config["scenario"]["sector"] = "E"
+    else:
+        config["scenario"]["sector"] = f"E-{config['scenario']['sector']}"
 
 # ----------------------------------- Rules ---------------------------------- #
 
+
+def electricity_figures(wildcards):
+    figs = []
+    if not config["run"]["validation"]:
+        # maps
+        figs.append(
+            expand(
+                RESULTS
+                + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/maps/{figure}",
+                **config["scenario"],
+                figure=FIGURES_MAPS,
+            )
+        )
+        # emissions
+        figs.append(
+            expand(
+                RESULTS
+                + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/emissions/{figure}",
+                **config["scenario"],
+                figure=FIGURES_EMISSIONS,
+            )
+        )
+        # production
+        figs.append(
+            expand(
+                RESULTS
+                + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/production/{figure}",
+                **config["scenario"],
+                figure=FIGURES_PRODUCTION,
+            )
+        )
+        # system
+        figs.append(
+            expand(
+                RESULTS
+                + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/system/{figure}",
+                **config["scenario"],
+                figure=FIGURES_SYSTEM,
+            )
+        )
+        return list(chain(*figs))  # expand list of lists to single list
+    else:
+        return []
+
+
+def sector_figures(wildcards):
+    figs = []
+    if "G" in config["scenario"]["sector"].split("-"):
+        figs.append("natural_gas.html")
+    if not figs:
+        return []
+    else:
+        return expand(
+            RESULTS
+            + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/gas/{figure}",
+            **config["scenario"],
+            figure=FIGURES_NATURAL_GAS,
+        )
+
+
+def validation_figures(wildcards):
+    if config["run"]["validation"]:
+        return expand(
+            RESULTS
+            + "{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{sector}/{figure}",
+            **config["scenario"],
+            figure=FIGURES_VALIDATE,
+        )
+    else:
+        return []
+
+
 rule all:
     input:
+<<<<<<< HEAD
         expand(
             "results/{interconnect}/figures/cluster_{clusters}/l{ll}_{opts}_{figure}.pdf",
             **config["scenario"],
             figure=FIGURES_SINGLE + FIGURES_VALIDATE,
         ),
         "repo_data/dag.jpg",
+=======
+        electricity_figures,
+        sector_figures,
+        validation_figures,
+        #"repo_data/dag.jpg",
+>>>>>>> 18e4a694cd8de33d656f99dcf0fa18a6cdb20c44
 
-# Create DAG with- 
-# snakemake --dag -F | sed -n "/digraph/,\$p" | dot -Tpng -o repo_data/dag.jpg
+
+# Create DAG with-
 # snakemake --rulegraph all | sed -n "/digraph/,\$p" | dot -Tpng -o repo_data/dag.jpg
+# snakemake --dag -F | sed -n "/digraph/,\$p" | dot -Tpng -o repo_data/dag.jpg
 rule dag:
     message:
         "Creating DAG of workflow."
@@ -108,11 +226,13 @@ rule dag:
         dot -Tjpg -o {output.jpg} {output.dot}
         """
 
+
 rule clean:
     message:
         "Remove all build results but keep downloaded data."
     run:
         import shutil
+
         shutil.rmtree("resources", ignore_errors=True)
         shutil.rmtree("results", ignore_errors=True)
         print("Data downloaded to data/ has not been cleaned.")

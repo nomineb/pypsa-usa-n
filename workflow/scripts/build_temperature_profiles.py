@@ -18,7 +18,7 @@ if __name__ == "__main__":
             interconnect="western",
             # simpl="",
             clusters=60,
-            scope="total"
+            scope="total",
         )
 
     nprocesses = int(snakemake.threads)

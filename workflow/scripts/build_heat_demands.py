@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: : 2020-2023 The PyPSA-Eur Authors
 #
 # SPDX-License-Identifier: MIT
 """
 Build heat demand time series using heating degree day (HDD) approximation.
 """
+
 
 import atlite
 import geopandas as gpd
@@ -22,7 +22,7 @@ if __name__ == "__main__":
             interconnect="western",
             # simpl="",
             clusters=60,
-            scope="total"
+            scope="total",
         )
 
     nprocesses = int(snakemake.threads)
